@@ -37,7 +37,7 @@ const COOKIE_NAME = "auth-token";
 const fakePayload = {
   userId: "user-123",
   email: "test@example.com",
-  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
 };
 
 describe("createSession", () => {

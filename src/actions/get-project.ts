@@ -10,7 +10,7 @@ export async function getProject(projectId: string) {
     throw new Error("Unauthorized");
   }
 
-  const project = await prisma.project.findUnique({
+  const project = await prisma.project.findFirst({
     where: {
       id: projectId,
       userId: session.userId,

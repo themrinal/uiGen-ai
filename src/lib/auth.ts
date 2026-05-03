@@ -12,12 +12,12 @@ const COOKIE_NAME = "auth-token";
 export interface SessionPayload {
   userId: string;
   email: string;
-  expiresAt: Date;
+  expiresAt: string; // ISO string — JWT serializes Date to string on sign/verify
 }
 
 export async function createSession(userId: string, email: string) {
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-  const session: SessionPayload = { userId, email, expiresAt };
+  const session: SessionPayload = { userId, email, expiresAt: expiresAt.toISOString() };
 
   const token = await new SignJWT({ ...session })
     .setProtectedHeader({ alg: "HS256" })

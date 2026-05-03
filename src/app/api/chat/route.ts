@@ -8,7 +8,40 @@ import { getSession } from "@/lib/auth";
 import { getLanguageModel } from "@/lib/provider";
 import { generationPrompt } from "@/lib/prompts/generation";
 
+// In-memory rate limiter for anonymous users (20 req/min per IP).
+// For multi-instance or production deployments, replace with a persistent store (e.g. Redis/Upstash).
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const ANON_RATE_LIMIT = 20;
+const RATE_WINDOW_MS = 60_000;
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return false;
+  }
+  if (entry.count >= ANON_RATE_LIMIT) return true;
+  entry.count++;
+  return false;
+}
+
 export async function POST(req: Request) {
+  const session = await getSession();
+
+  if (!session) {
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
+      req.headers.get("x-real-ip") ??
+      "unknown";
+    if (isRateLimited(ip)) {
+      return new Response(
+        JSON.stringify({ error: "Rate limit exceeded. Please try again later." }),
+        { status: 429, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
   const {
     messages,
     files,
@@ -44,37 +77,35 @@ export async function POST(req: Request) {
       file_manager: buildFileManagerTool(fileSystem),
     },
     onFinish: async ({ response }) => {
-      // Save to project if projectId is provided and user is authenticated
-      if (projectId) {
-        try {
-          // Check if user is authenticated
-          const session = await getSession();
-          if (!session) {
-            console.error("User not authenticated, cannot save project");
-            return;
-          }
+      if (!projectId || !session) return;
 
-          // Get the messages from the response
-          const responseMessages = response.messages || [];
-          // Combine original messages with response messages
-          const allMessages = appendResponseMessages({
-            messages: [...messages.filter((m) => m.role !== "system")],
-            responseMessages,
-          });
+      try {
+        const responseMessages = response.messages || [];
+        const allMessages = appendResponseMessages({
+          messages: [...messages.filter((m) => m.role !== "system")],
+          responseMessages,
+        });
 
-          await prisma.project.update({
-            where: {
-              id: projectId,
-              userId: session.userId,
-            },
-            data: {
-              messages: JSON.stringify(allMessages),
-              data: JSON.stringify(fileSystem.serialize()),
-            },
-          });
-        } catch (error) {
-          console.error("Failed to save project data:", error);
+        // Verify project ownership before updating (userId is not a unique field,
+        // so findFirst is used instead of findUnique)
+        const existing = await prisma.project.findFirst({
+          where: { id: projectId, userId: session.userId },
+          select: { id: true },
+        });
+        if (!existing) {
+          console.error("Project not found or access denied");
+          return;
         }
+
+        await prisma.project.update({
+          where: { id: projectId },
+          data: {
+            messages: JSON.stringify(allMessages),
+            data: JSON.stringify(fileSystem.serialize()),
+          },
+        });
+      } catch (error) {
+        console.error("Failed to save project data:", error);
       }
     },
   });
