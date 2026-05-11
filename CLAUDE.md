@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Code Style
 
 - Only add comments for complex or non-obvious logic. Do not comment straightforward code.
+- All local imports use the `@/` alias, which maps to `./src/*` (configured in `tsconfig.json`). AI-generated code placed inside the VFS must also use `@/` for cross-file imports.
 
 ## Commands
 
@@ -51,6 +52,8 @@ JWT_SECRET=          # Optional; defaults to "development-secret-key" in dev
 4. Streams tool calls back to the client, which applies them client-side in real time
 5. On finish, saves messages + serialized VFS to SQLite (authenticated users only)
 
+The system prompt ([src/lib/prompts/generation.tsx](src/lib/prompts/generation.tsx)) enforces a strict design system on generated code: **dark backgrounds only** (`bg-slate-950`, `bg-zinc-950`, or `bg-gray-950`), specific Tailwind design tokens, and **lucide-react as the sole icon library**. Modifying this prompt changes all future AI output.
+
 Claude has two tools:
 - **`str_replace_editor`** — `create`, `str_replace`, `insert`, `view`, `undo_edit` operations on virtual files ([src/lib/tools/str-replace.ts](src/lib/tools/str-replace.ts))
 - **`file_manager`** — `rename` and `delete` operations ([src/lib/tools/file-manager.ts](src/lib/tools/file-manager.ts))
@@ -78,16 +81,18 @@ Claude has two tools:
 
 `getLanguageModel()` ([src/lib/provider.ts](src/lib/provider.ts)) returns:
 - **Real Claude** (`claude-haiku-4-5` via `@ai-sdk/anthropic`) when `ANTHROPIC_API_KEY` is set
-- **`MockLanguageModel`** (hardcoded counter/form/card components) when the key is absent — useful for UI development without API costs
+- **`MockLanguageModel`** (hardcoded counter/form/card components) when the key is absent — useful for UI development without API costs. It runs 3–4 fixed tool steps then stops; it does not respond to the actual prompt.
 
 ### Auth & persistence
 
 - JWT sessions via `jose`, stored in an httpOnly cookie (`auth-token`), 7-day expiry ([src/lib/auth.ts](src/lib/auth.ts))
 - `JWT_SECRET` env var; falls back to `"development-secret-key"` in dev
 - `src/middleware.ts` guards `/api/projects` and `/api/filesystem` routes; all other routes (including `/api/chat`) are public
+- Anonymous users are rate-limited to **20 requests/min per IP** (enforced in `route.ts` via an in-memory map)
 - Prisma + SQLite (`prisma/dev.db`) stores `User` and `Project` records; projects persist `messages` (JSON) and `data` (serialized VFS JSON)
 - Prisma client is generated to `src/generated/prisma` (not the default `node_modules/.prisma`) — import from there, not `@prisma/client`
-- Anonymous users can work freely; their chat state is tracked in **sessionStorage** via `anon-work-tracker` and can be saved to a project upon sign-up
+- Always obtain the Prisma instance from [src/lib/prisma.ts](src/lib/prisma.ts) (global singleton with dev hot-reload reattachment) — never instantiate `PrismaClient` directly
+- Anonymous users can work freely; their chat state is tracked in **sessionStorage** via [src/lib/anon-work-tracker.ts](src/lib/anon-work-tracker.ts) and can be saved to a project upon sign-up
 - **Database schema:** Always reference [prisma/schema.prisma](prisma/schema.prisma) to understand table structure before writing any DB queries or migrations
 
 ### Server actions & app routes
